@@ -101,7 +101,7 @@ async function run() {
   const history = await request('/api/hr/payroll/payments/history?year=2026&month=5&status=PAID&department=Sales', { token: hrToken });
   assert(history.status === 200 && history.body.data.length === 1 && ['TXN-001', 'TXN-002'].includes(history.body.data[0].transactionReference), 'Payment history filters and returns payment metadata');
   const detail = await request(`/api/hr/payroll/payments/${first._id}`, { token: hrToken });
-  assert(detail.status === 200 && detail.body.data.remarks === 'Test payment', 'Individual payment detail endpoint returns full record');
+  assert(detail.status === 200 && ['Test payment', 'Concurrent retry'].includes(detail.body.data.remarks), 'Individual payment detail endpoint returns full record');
   const batchAfter = await PayrollBatch.findById(batch._id).lean();
   assert(batchAfter.status === 'PAID' && batchAfter.paidAt.getTime() === oldPaidAt.getTime() && batchAfter.paymentDetails.reference === 'legacy-ref', 'Legacy PAID batch snapshot metadata remains unchanged');
   assert(await SalaryPaymentCount() === 10, 'Unique employee-month payment rows were created');

@@ -4,16 +4,19 @@ const helmet = require('helmet');
 const morgan = require('morgan');
 const path = require('path');
 const http = require('http');
+const mongoose = require('mongoose');
+const rateLimit = require('express-rate-limit');
 const socketService = require('./services/socketService');
 
 // 1. Load environment variables
 const env = require('./config/env');
-const { connectDB } = require('./config/db');
+const { connectDB, disconnectDB } = require('./config/db');
 const logger = require('./utils/logger');
 
 // Middleware imports
 const notFoundMiddleware = require('./middleware/notFoundMiddleware');
 const { errorMiddleware } = require('./middleware/errorMiddleware');
+const { sanitizeMiddleware } = require('./middleware/sanitizeMiddleware');
 
 // Route imports
 const authRoutes = require('./routes/authRoutes');
@@ -23,6 +26,11 @@ const birthdayRoutes = require('./routes/birthdayRoutes');
 
 // 3. Initialize Express app
 const app = express();
+
+// Behind Render / other reverse proxies: trust the first hop so req.ip is the real client IP
+// (needed for accurate login history and rate limiting).
+app.set('trust proxy', 1);
+app.disable('x-powered-by');
 
 // 4. Enable Helmet for HTTP security headers (permit cross-origin resource policy for documents & media)
 app.use(helmet({
@@ -75,11 +83,7 @@ const corsOptions = {
       return callback(null, true);
     }
 
-    // 4. In non-production environments, default to permissive for local developer tooling
-    if (!env.isProduction) {
-      return callback(null, true);
-    }
-
+    // Any other origin is rejected (in every environment). Add extra origins via CLIENT_URL.
     return callback(null, false);
   },
   credentials: true,
@@ -112,6 +116,9 @@ app.use(express.json({ limit: '10mb' }));
 // 7. Enable URL-encoded body parsing
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
+// Strip "$" operator keys from client input to block NoSQL injection
+app.use(sanitizeMiddleware);
+
 // 8. Enable request logging with Morgan
 if (env.nodeEnv !== 'test') {
   app.use(morgan(env.isProduction ? 'combined' : 'dev'));
@@ -131,16 +138,39 @@ app.use('/uploads', (req, res, next) => {
   next();
 }, express.static(path.join(__dirname, 'uploads')));
 
-// Health check endpoint
+// Health check endpoint (also reports MongoDB connection state; returns 503 when the DB is down)
+const DB_STATES = ['disconnected', 'connected', 'connecting', 'disconnecting'];
 app.get('/api/health', (req, res) => {
-  return res.status(200).json({
-    success: true,
-    message: 'HR Management API is running'
+  const dbState = DB_STATES[mongoose.connection.readyState] || 'unknown';
+  const healthy = mongoose.connection.readyState === 1;
+  return res.status(healthy ? 200 : 503).json({
+    success: healthy,
+    message: healthy ? 'HR Management API is running' : 'HR Management API is running but the database is not connected',
+    database: dbState
   });
 });
 
+// Brute-force protection for public auth endpoints (login, refresh, forgot/reset password)
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: env.authRateLimitMax,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  skip: (req) => req.method === 'OPTIONS',
+  // Key on IP + email so many staff logging in from one office IP are not blocked together
+  keyGenerator: (req) => {
+    const email = req.body && typeof req.body.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+    return `${req.ip}|${email}`;
+  },
+  handler: (req, res) => res.status(429).json({
+    success: false,
+    message: 'Too many authentication attempts. Please try again in a few minutes.',
+    error: null
+  })
+});
+
 // 9. Register API routes
-app.use('/api/auth', authRoutes);
+app.use('/api/auth', authLimiter, authRoutes);
 app.use('/api/hr', hrRoutes);
 app.use('/api/staff', staffRoutes);
 app.use('/api/birthdays', birthdayRoutes);
@@ -181,6 +211,18 @@ if (require.main === module) {
       process.exit(1);
     }
   });
+
+  // Graceful shutdown (Render / Docker send SIGTERM on redeploy)
+  const shutdown = (signal) => {
+    logger.info(`${signal} received. Closing HTTP server and MongoDB connection...`);
+    server.close(async () => {
+      await disconnectDB();
+      process.exit(0);
+    });
+    setTimeout(() => process.exit(1), 10000).unref();
+  };
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 
   // Handle uncaught exceptions
   process.on('uncaughtException', (err) => {

@@ -7,6 +7,7 @@ const PayrollConflict = require('../models/PayrollConflict');
 const PayrollBatch = require('../models/PayrollBatch');
 const PayrollRecord = require('../models/PayrollRecord');
 const { AppError } = require('../middleware/errorMiddleware');
+const { exactMatchRegex, containsRegex } = require('../utils/escapeRegex');
 
 /**
  * Checks if workMode string indicates Work From Home
@@ -68,7 +69,7 @@ class PayrollService {
 
     if (options.department && options.department !== 'all') {
       andConditions.push({
-        department: new RegExp(`^${options.department.trim()}$`, 'i')
+        department: exactMatchRegex(options.department)
       });
     }
 
@@ -79,7 +80,7 @@ class PayrollService {
     }
 
     if (options.search && options.search.trim() !== '') {
-      const regex = new RegExp(options.search.trim(), 'i');
+      const regex = containsRegex(options.search);
       andConditions.push({
         $or: [
           { firstName: regex },
@@ -174,7 +175,7 @@ class PayrollService {
       schedule = await DepartmentSchedule.getEffectiveSchedule(employee.department, monthDate);
     } else {
       schedule = await DepartmentSchedule.findOne({
-        department: new RegExp(`^${employee.department.trim()}$`, 'i')
+        department: exactMatchRegex(employee.department)
       }).lean();
     }
 
@@ -723,7 +724,7 @@ class PayrollService {
     const existingBatch = await PayrollBatch.findOne({
       year,
       month,
-      department: new RegExp(`^${department}$`, 'i')
+      department: exactMatchRegex(department)
     });
 
     if (existingBatch && (existingBatch.status === 'FINALIZED' || existingBatch.status === 'PAID')) {
@@ -944,7 +945,7 @@ class PayrollService {
     if (year) query.year = parseInt(year, 10);
     if (month) query.month = parseInt(month, 10);
     if (department && department !== 'all') {
-      query.department = new RegExp(`^${department.trim()}$`, 'i');
+      query.department = exactMatchRegex(department);
     }
     if (status && status !== 'all') {
       query.status = status.toUpperCase();
@@ -997,7 +998,7 @@ class PayrollService {
 
     const recordQuery = { batchId: batch._id };
     if (search && search.trim() !== '') {
-      const regex = new RegExp(search.trim(), 'i');
+      const regex = containsRegex(search);
       recordQuery.$or = [
         { employeeName: regex },
         { employeeId: regex },

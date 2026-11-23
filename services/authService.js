@@ -214,7 +214,7 @@ class AuthService {
     return {
       message: 'Password reset token generated successfully.',
       // Providing resetToken in development mode so client/test can consume it
-      resetToken: process.env.NODE_ENV !== 'production' ? token : undefined
+      resetToken: env.exposeResetToken ? token : undefined
     };
   }
 

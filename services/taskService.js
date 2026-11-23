@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const Task = require('../models/Task');
 const Employee = require('../models/Employee');
 const { AppError } = require('../middleware/errorMiddleware');
+const { exactMatchRegex, containsRegex } = require('../utils/escapeRegex');
 
 class TaskService {
   /**
@@ -59,7 +60,7 @@ class TaskService {
       filter.status = status.toLowerCase();
     }
     if (department && department !== 'all') {
-      filter.department = new RegExp(`^${department.trim()}$`, 'i');
+      filter.department = exactMatchRegex(department);
     }
     if (employeeId) {
       const emp = await this.resolveEmployee(employeeId);

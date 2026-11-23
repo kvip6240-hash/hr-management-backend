@@ -293,6 +293,11 @@ const seedSuperAdmin = async () => {
       'hrAdmin'
     );
 
+    if (env.isProduction && !process.env.SEED_SUPER_ADMIN_PASSWORD) {
+      logger.error('Refusing to seed SUPER_ADMIN in production with the built-in default password. Set SEED_SUPER_ADMIN_PASSWORD.');
+      process.exit(1);
+    }
+
     const isRestoreRequested =
       process.argv.includes('--restore-super-admin') ||
       process.argv.includes('--restore') ||

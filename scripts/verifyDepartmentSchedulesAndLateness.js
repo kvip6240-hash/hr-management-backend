@@ -1,9 +1,10 @@
 const assert = require('assert');
 const mongoose = require('mongoose');
 const path = require('path');
-require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+process.env.NODE_ENV = 'test';
 
-const { connectDB, disconnectDB } = require('../config/db');
+const { connectTestDatabase } = require('./testDatabase');
+const User = require('../models/User');
 const DepartmentSchedule = require('../models/DepartmentSchedule');
 const Employee = require('../models/Employee');
 const Attendance = require('../models/Attendance');
@@ -20,12 +21,33 @@ const hrService = require('../services/hrService');
 const staffService = require('../services/staffService');
 const { summarizeAttendanceDay } = require('../services/attendanceDashboardMetrics');
 
+async function seedFixtures() {
+  await DepartmentSchedule.create([
+    { department: 'TECH', departmentDisplay: 'Tech', checkInTime: '10:00', checkOutTime: '18:00', timezone: 'Asia/Kolkata', timeZone: 'Asia/Kolkata', gracePeriodMinutes: 0 },
+    { department: 'TELECALLING', departmentDisplay: 'Telecalling', checkInTime: '09:00', checkOutTime: '18:00', timezone: 'Asia/Kolkata', timeZone: 'Asia/Kolkata', gracePeriodMinutes: 0 }
+  ]);
+
+  const fixtures = [
+    { employeeId: 'EMP_SCHED_TECH', department: 'Tech' },
+    { employeeId: 'EMP_SCHED_TELE', department: 'Telecalling' }
+  ];
+  for (const f of fixtures) {
+    const email = `${f.employeeId.toLowerCase()}@example.com`;
+    const user = await User.create({ firstName: 'Sched', lastName: f.department, email, password: 'Password123!', role: 'STAFF' });
+    await Employee.create({ user: user._id, employeeId: f.employeeId, firstName: 'Sched', lastName: f.department, email, department: f.department, designation: 'Engineer', status: 'ACTIVE' });
+    await staffService.checkIn(user, 'fixture check-in');
+  }
+}
+
 async function runTestSuite() {
   console.log('================================================================');
   console.log('   DEPARTMENT SCHEDULES & LATE ARRIVAL CALCULATION TEST SUITE   ');
   console.log('================================================================\n');
 
-  await connectDB();
+  // Run against the isolated local test database (never the configured MONGODB_URI)
+  // and seed the data this suite depends on, so it does not rely on pre-existing records.
+  await connectTestDatabase();
+  await seedFixtures();
 
   // -------------------------------------------------------------------------
   // 1. Tech Schedule Resolution
@@ -224,7 +246,7 @@ async function runTestSuite() {
   assert.strictEqual(dashboardStats.lateArrivals, lateQueryRes.pagination.total, 'Dashboard lateArrivals count must match GET /api/hr/attendance?status=LATE total count');
   console.log('  [PASS] Dashboard late count is strictly consistent with attendance late query total');
 
-  await disconnectDB();
+  await mongoose.disconnect();
   console.log('\n================================================================');
   console.log('   ALL 8 VERIFICATION CATEGORIES PASSED SUCCESSFULLY!          ');
   console.log('================================================================\n');

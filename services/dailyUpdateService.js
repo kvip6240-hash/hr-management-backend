@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const DailyUpdate = require('../models/DailyUpdate');
 const Employee = require('../models/Employee');
 const { AppError } = require('../middleware/errorMiddleware');
+const { exactMatchRegex, containsRegex } = require('../utils/escapeRegex');
 
 /**
  * Format a daily update document into a clean, frontend-friendly object.
@@ -226,7 +227,7 @@ class DailyUpdateService {
 
     // Filter by department
     if (query.department && query.department.trim()) {
-      filter.department = new RegExp(`^${query.department.trim()}$`, 'i');
+      filter.department = exactMatchRegex(query.department);
     }
 
     // Filter by date or date range
@@ -245,7 +246,7 @@ class DailyUpdateService {
 
     // Search text within updateText or employee name
     if (query.search && query.search.trim()) {
-      const searchRegex = new RegExp(query.search.trim(), 'i');
+      const searchRegex = containsRegex(query.search);
       const matchedEmployees = await Employee.find({
         $or: [
           { firstName: searchRegex },

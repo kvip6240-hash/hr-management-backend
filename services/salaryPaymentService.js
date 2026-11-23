@@ -4,6 +4,7 @@ const PayrollBatch = require('../models/PayrollBatch');
 const PayrollRecord = require('../models/PayrollRecord');
 const PayrollConflict = require('../models/PayrollConflict');
 const { AppError } = require('../middleware/errorMiddleware');
+const { exactMatchRegex, containsRegex } = require('../utils/escapeRegex');
 
 function validatePeriod(year, month) {
   year = Number.parseInt(year, 10);
@@ -172,8 +173,8 @@ class SalaryPaymentService {
     if (filters.month && (!Number.isInteger(month) || month < 1 || month > 12)) throw new AppError('Invalid month filter', 400);
     if (year) query.payrollYear = year;
     if (month) query.payrollMonth = month;
-    if (filters.employeeId) query.employeeId = new RegExp(`^${String(filters.employeeId).trim()}$`, 'i');
-    if (filters.department && filters.department !== 'all') query.department = new RegExp(`^${String(filters.department).trim()}$`, 'i');
+    if (filters.employeeId) query.employeeId = exactMatchRegex(filters.employeeId);
+    if (filters.department && filters.department !== 'all') query.department = exactMatchRegex(filters.department);
     if (filters.status && filters.status !== 'all') {
       const status = String(filters.status).toUpperCase();
       if (!['PENDING', 'PAID'].includes(status)) throw new AppError('status must be PENDING or PAID', 400);

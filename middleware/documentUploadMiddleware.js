@@ -30,7 +30,9 @@ const fileFilter = (req, file, cb) => {
   const allowedExtensions = ['.pdf', '.jpg', '.jpeg', '.png'];
   const ext = path.extname(file.originalname).toLowerCase();
 
-  if (allowedMimeTypes.includes(file.mimetype) || allowedExtensions.includes(ext)) {
+  // Both the MIME type AND the extension must be allowed (previously either one was enough,
+  // so e.g. "payload.html" sent with an image/png MIME type was accepted).
+  if (allowedMimeTypes.includes(file.mimetype) && allowedExtensions.includes(ext)) {
     cb(null, true);
   } else {
     cb(new AppError('Only PDF, JPG, JPEG, and PNG files are allowed', 400), false);

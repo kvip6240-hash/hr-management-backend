@@ -12,6 +12,10 @@ const seedAdmin = async () => {
 
     const adminEmail = (env.seedAdmin.email || 'admin@hrmanagement.com').toLowerCase();
     const adminPassword = env.seedAdmin.password || 'Admin@12345';
+    if (env.isProduction && !process.env.SEED_ADMIN_PASSWORD) {
+      console.error('Refusing to seed HR admin in production with the built-in default password. Set SEED_ADMIN_PASSWORD.');
+      process.exit(1);
+    }
 
     // Check if any HR account or an account with this email already exists
     const existingAdmin = await User.findOne({

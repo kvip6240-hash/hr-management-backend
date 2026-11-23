@@ -17,6 +17,7 @@ const {
 } = require('./attendanceDashboardMetrics');
 const { AppError } = require('../middleware/errorMiddleware');
 const { normalizeLeaveType, enrichLeaveResponse, enrichLeaveResponses } = require('../utils/leaveResponseHelper');
+const { exactMatchRegex, containsRegex } = require('../utils/escapeRegex');
 
 // Stored late flags are authoritative business classifications. A record must
 // have a real check-in; missing check-ins are never counted as late.
@@ -188,7 +189,7 @@ class HRService {
         }
 
         if(search && search.trim() !== '') {
-          const regex = new RegExp(search.trim(), 'i');
+          const regex = containsRegex(search);
     filter.$or = [
       { firstName: regex },
       { lastName: regex },
@@ -199,8 +200,8 @@ class HRService {
     ];
   }
 
-  if(department) filter.department = new RegExp(`^${department.trim()}$`, 'i');
-  if(designation) filter.designation = new RegExp(`^${designation.trim()}$`, 'i');
+  if(department) filter.department = exactMatchRegex(department);
+  if(designation) filter.designation = exactMatchRegex(designation);
   if(status && status.trim() !== '') {
     const s = status.trim().toUpperCase();
     if (s === 'DELETED') {
@@ -877,7 +878,7 @@ return {
     const searchText = search.trim().replace(/[^a-z0-9@ _.-]/gi, '');
     if (!searchText) return { attendance: [], pagination: { page, limit, total: 0, totalPages: 0 } };
     const terms = searchText.split(/\s+/).filter(Boolean);
-    const matches = await Employee.find({ $and: terms.map(term => { const regex = new RegExp(term, 'i'); return { $or: [{ employeeId: regex }, { firstName: regex }, { lastName: regex }, { email: regex }] }; }) }).select('_id').lean();
+    const matches = await Employee.find({ $and: terms.map(term => { const regex = containsRegex(term); return { $or: [{ employeeId: regex }, { firstName: regex }, { lastName: regex }, { email: regex }] }; }) }).select('_id').lean();
     const matchingIds = matches.map(employee => String(employee._id));
     if (!matchingIds.length) return { attendance: [], pagination: { page, limit, total: 0, totalPages: 0 } };
     if (filter.employee) {
@@ -1410,8 +1411,8 @@ return {
       const deptTrim = filters.department.trim();
       const deptEmployees = await Employee.find({
         $or: [
-          { department: new RegExp('^' + deptTrim + '$', 'i') },
-          { department: new RegExp(deptTrim, 'i') }
+          { department: exactMatchRegex(deptTrim) },
+          { department: containsRegex(deptTrim) }
         ],
         isDeleted: { $ne: true }
       }).select('_id');
@@ -1923,7 +1924,7 @@ return {
     const exists = await Employee.exists({
       $or: [
         { department: new RegExp(`^${escaped}$`, 'i') },
-        { department: new RegExp(`^${canonicalDept}$`, 'i') }
+        { department: exactMatchRegex(canonicalDept) }
       ]
     });
     if (!exists) throw new AppError('Department not found', 404);
@@ -2047,8 +2048,8 @@ return {
       const canonical = DepartmentSchedule.toCanonicalDeptKey ? DepartmentSchedule.toCanonicalDeptKey(department) : department.trim().toUpperCase();
       const emps = await Employee.find({
         $or: [
-          { department: new RegExp(`^${department.trim()}$`, 'i') },
-          { department: new RegExp(`^${canonical}$`, 'i') }
+          { department: exactMatchRegex(department) },
+          { department: exactMatchRegex(canonical) }
         ]
       }).select('_id');
       filter.employee = { $in: emps.map(e => e._id) };
