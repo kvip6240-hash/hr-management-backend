@@ -2,6 +2,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { AppError } = require('./errorMiddleware');
+const { persistUploadedFile } = require('../utils/fileStorage');
 
 const uploadDir = path.join(__dirname, '..', 'uploads', 'documents');
 if (!fs.existsSync(uploadDir)) {
@@ -47,6 +48,44 @@ const documentUpload = multer({
   fileFilter
 });
 
+/**
+ * Copy every uploaded file into durable GridFS storage (sets file.storageId).
+ */
+const persistFiles = async (req) => {
+  const files = [];
+  if (req.file) files.push(req.file);
+  if (req.files) {
+    const list = Array.isArray(req.files) ? req.files : Object.values(req.files).flat();
+    for (const f of list) if (!files.includes(f)) files.push(f);
+  }
+  for (const f of files) {
+    if (!f.storageId) {
+      await persistUploadedFile(f, { uploadedBy: req.user ? String(req.user._id) : null });
+    }
+  }
+};
+
+/**
+ * Single-file upload that is also persisted to GridFS.
+ * Usage: router.post('/x', documentUploadSingle('file'), handler)
+ */
+const documentUploadSingle = (fieldName) => (req, res, next) => {
+  documentUpload.single(fieldName)(req, res, async (err) => {
+    if (err) {
+      if (err.name === 'MulterError' && err.code === 'LIMIT_FILE_SIZE') {
+        return next(new AppError('File size exceeds 15MB limit', 400));
+      }
+      return next(err);
+    }
+    try {
+      await persistFiles(req);
+      next();
+    } catch (persistErr) {
+      next(new AppError(`Failed to store uploaded file: ${persistErr.message}`, 500));
+    }
+  });
+};
+
 const leaveAttachmentUpload = (req, res, next) => {
   const contentType = req.headers['content-type'] || '';
   if (!contentType.includes('multipart/form-data')) {
@@ -78,12 +117,15 @@ const leaveAttachmentUpload = (req, res, next) => {
         || req.files['attachment']?.[0]
         || null;
     }
-    next();
+    persistFiles(req)
+      .then(() => next())
+      .catch((persistErr) => next(new AppError(`Failed to store uploaded file: ${persistErr.message}`, 500)));
   });
 };
 
 module.exports = {
   documentUpload,
+  documentUploadSingle,
   leaveAttachmentUpload,
   uploadDir
 };

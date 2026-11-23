@@ -1,6 +1,6 @@
 const User = require('../models/User');
 const Employee = require('../models/Employee');
-const { verifyAccessToken } = require('../utils/jwt');
+const { verifyAccessToken, isTokenVersionCurrent } = require('../utils/jwt');
 const { sendError } = require('../utils/response');
 
 /**
@@ -34,6 +34,10 @@ const authMiddleware = async (req, res, next) => {
 
     if (!user) {
       return sendError(res, 'User belonging to this token no longer exists.', null, 401);
+    }
+
+    if (!isTokenVersionCurrent(decoded, user)) {
+      return sendError(res, 'Session has ended. Please login again.', null, 401);
     }
 
     if (!user.isActive) {

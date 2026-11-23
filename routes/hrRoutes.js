@@ -8,7 +8,7 @@ const chatController = require('../controllers/chatController');
 const dailyUpdateController = require('../controllers/dailyUpdateController');
 const authMiddleware = require('../middleware/authMiddleware');
 const roleMiddleware = require('../middleware/roleMiddleware');
-const { documentUpload } = require('../middleware/documentUploadMiddleware');
+const { documentUploadSingle } = require('../middleware/documentUploadMiddleware');
 const {
   createEmployeeValidator,
   updateEmployeeValidator,
@@ -16,7 +16,10 @@ const {
   mongoIdParamValidator,
   birthdaysValidator,
   hrDailyUpdatesQueryValidator,
-  departmentScheduleValidator
+  departmentScheduleValidator,
+  createTaskValidator,
+  updateTaskValidator,
+  objectIdParam
 } = require('../validators/hrValidator');
 
 
@@ -57,12 +60,12 @@ router.post('/employees/:id/resign', hrController.resignEmployee);
 router.put('/employees/:id/salary', mongoIdParamValidator, hrController.updateSalary);
 
 // HR Document Management endpoints
-router.post('/employees/:id/documents', documentUpload.single('file'), documentController.uploadDocument);
+router.post('/employees/:id/documents', documentUploadSingle('file'), documentController.uploadDocument);
 router.get('/employees/:id/documents', documentController.getEmployeeDocuments);
-router.get('/documents/:docId', documentController.getDocumentById);
-router.put('/documents/:docId', documentUpload.single('file'), documentController.replaceDocument);
-router.patch('/documents/:docId/archive', documentController.archiveDocument);
-router.get('/documents/:docId/download', documentController.downloadDocument);
+router.get('/documents/:docId', objectIdParam('docId'), documentController.getDocumentById);
+router.put('/documents/:docId', objectIdParam('docId'), documentUploadSingle('file'), documentController.replaceDocument);
+router.patch('/documents/:docId/archive', objectIdParam('docId'), documentController.archiveDocument);
+router.get('/documents/:docId/download', objectIdParam('docId'), documentController.downloadDocument);
 
 // Attendance
 router.get('/attendance', hrController.getAttendance);
@@ -113,10 +116,10 @@ router.get('/payroll/batches/:batchId/employees/:employeeId/payslip', payrollCon
 
 // Task Management Endpoints
 router.get('/tasks', taskController.getTasks);
-router.post('/tasks', taskController.createTask);
-router.get('/tasks/:id', taskController.getTaskById);
-router.put('/tasks/:id', taskController.updateTask);
-router.delete('/tasks/:id', taskController.deleteTask);
+router.post('/tasks', createTaskValidator, taskController.createTask);
+router.get('/tasks/:id', objectIdParam('id'), taskController.getTaskById);
+router.put('/tasks/:id', updateTaskValidator, taskController.updateTask);
+router.delete('/tasks/:id', objectIdParam('id'), taskController.deleteTask);
 
 // Department Chat & Messaging Endpoints (Supports both :deptKey and :departmentKey)
 router.get('/company-chat', chatController.getCompanyConversation);

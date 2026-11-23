@@ -6,7 +6,8 @@ const {
   loginValidator,
   refreshTokenValidator,
   forgotPasswordValidator,
-  resetPasswordValidator
+  resetPasswordValidator,
+  changePasswordValidator
 } = require('../validators/authValidator');
 
 // Public routes
@@ -17,5 +18,6 @@ router.post('/reset-password', resetPasswordValidator, authController.resetPassw
 
 // Authenticated route
 router.post('/logout', authMiddleware, authController.logout);
+router.post('/change-password', authMiddleware, changePasswordValidator, authController.changePassword);
 
 module.exports = router;

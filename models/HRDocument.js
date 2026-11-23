@@ -56,6 +56,11 @@ const hrDocumentSchema = new mongoose.Schema(
       type: String,
       required: [true, 'File MIME type is required']
     },
+    // GridFS file id (durable copy stored in MongoDB, bucket "documents")
+    storageId: {
+      type: mongoose.Schema.Types.ObjectId,
+      default: null
+    },
     fileSize: {
       type: Number,
       required: [true, 'File size is required']

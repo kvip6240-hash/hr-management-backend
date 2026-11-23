@@ -12,7 +12,8 @@ const generateAccessToken = (user) => {
     {
       id: user._id || user.id,
       email: user.email,
-      role: user.role
+      role: user.role,
+      tv: user.tokenVersion || 0
     },
     env.jwt.secret,
     { expiresIn: env.jwt.expiresIn }
@@ -27,7 +28,8 @@ const generateAccessToken = (user) => {
 const generateRefreshToken = (user) => {
   return jwt.sign(
     {
-      id: user._id || user.id
+      id: user._id || user.id,
+      tv: user.tokenVersion || 0
     },
     env.jwt.refreshSecret,
     { expiresIn: env.jwt.refreshExpiresIn }
@@ -74,7 +76,14 @@ const hashToken = (token) => {
   return crypto.createHash('sha256').update(token).digest('hex');
 };
 
+/**
+ * True when a decoded token was issued for the user's current token version
+ * (tokens issued before logout / password change / deactivation are rejected).
+ */
+const isTokenVersionCurrent = (decoded, user) => (decoded.tv || 0) === (user.tokenVersion || 0);
+
 module.exports = {
+  isTokenVersionCurrent,
   generateAccessToken,
   generateRefreshToken,
   verifyAccessToken,

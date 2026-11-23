@@ -9,6 +9,8 @@ const payrollController = require('../controllers/payrollController');
 const authMiddleware = require('../middleware/authMiddleware');
 const roleMiddleware = require('../middleware/roleMiddleware');
 const { leaveAttachmentUpload } = require('../middleware/documentUploadMiddleware');
+const { body } = require('express-validator');
+const { validate } = require('../validators/authValidator');
 const {
   updateProfileValidator,
   checkInValidator,
@@ -35,7 +37,7 @@ const departmentChatAuth = roleMiddleware('STAFF', 'HR', 'SUPER_ADMIN');
 router.get('/dashboard', staffOnly, staffController.getDashboard);
 
 // Company-Wide Birthdays for Staff View (Tech & Telecalling)
-const { birthdaysValidator } = require('../validators/hrValidator');
+const { birthdaysValidator, objectIdParam } = require('../validators/hrValidator');
 router.get('/birthdays', staffOnly, birthdaysValidator, staffController.getBirthdays);
 
 // Profile
@@ -44,8 +46,8 @@ router.put('/profile', staffOnly, updateProfileValidator, staffController.update
 
 // Documents (Staff can only view/download their own documents)
 router.get('/documents', staffOnly, documentController.getMyDocuments);
-router.get('/documents/:docId', staffOnly, documentController.getStaffDocumentById);
-router.get('/documents/:docId/download', staffOnly, documentController.downloadDocument);
+router.get('/documents/:docId', staffOnly, objectIdParam('docId'), documentController.getStaffDocumentById);
+router.get('/documents/:docId/download', staffOnly, objectIdParam('docId'), documentController.downloadDocument);
 
 // Attendance
 router.post('/attendance/check-in', staffOnly, checkInValidator, staffController.checkIn);
@@ -74,8 +76,8 @@ router.delete('/leaves/:id', staffOnly, leaveIdParamValidator, staffController.c
 
 // Tasks (Staff view and manage own tasks)
 router.get('/tasks', staffOnly, taskController.getStaffTasks);
-router.get('/tasks/:id', staffOnly, taskController.getTaskById);
-router.patch('/tasks/:id/status', staffOnly, taskController.updateStaffTaskStatus);
+router.get('/tasks/:id', staffOnly, objectIdParam('id'), taskController.getTaskById);
+router.patch('/tasks/:id/status', staffOnly, objectIdParam('id'), body('status').isString().withMessage('status must be a string'), validate, taskController.updateStaffTaskStatus);
 
 // Daily Work Updates (Staff submits and views own daily updates)
 router.post('/daily-updates', staffOnly, dailyUpdateValidator, dailyUpdateController.submitDailyUpdate);

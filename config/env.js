@@ -37,6 +37,18 @@ const env = {
   
   clientUrl: process.env.CLIENT_URL || 'http://localhost:51834,http://localhost:3000',
 
+  // Outgoing email (password reset / new-account credentials). Optional.
+  smtp: {
+    host: process.env.SMTP_HOST || '',
+    port: parseInt(process.env.SMTP_PORT, 10) || 587,
+    user: process.env.SMTP_USER || '',
+    pass: process.env.SMTP_PASS || '',
+    from: process.env.SMTP_FROM || process.env.SMTP_USER || ''
+  },
+  // Frontend page that accepts ?token=... to finish a password reset (optional)
+  passwordResetUrl: (process.env.PASSWORD_RESET_URL || '').trim(),
+  minPasswordLength: 8,
+
   // Location is optional for staff login (both OFFICE and WORK_FROM_HOME). Kept for legacy client compatibility.
   staffLoginRequireLocation: process.env.STAFF_LOGIN_REQUIRE_LOCATION === 'true',
   

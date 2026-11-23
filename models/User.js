@@ -48,6 +48,20 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: true
     },
+    // Incremented on logout / password change / deactivation to revoke every issued token
+    tokenVersion: {
+      type: Number,
+      default: 0
+    },
+    // True when the account was created with a system-generated temporary password
+    mustChangePassword: {
+      type: Boolean,
+      default: false
+    },
+    passwordChangedAt: {
+      type: Date,
+      default: null
+    },
     lastLogin: {
       type: Date,
       default: null

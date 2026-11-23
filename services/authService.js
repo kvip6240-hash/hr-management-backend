@@ -5,6 +5,7 @@ const env = require('../config/env');
 const logger = require('../utils/logger');
 const { generateAccessToken, generateRefreshToken, verifyRefreshToken, generateResetToken, hashToken } = require('../utils/jwt');
 const { AppError } = require('../middleware/errorMiddleware');
+const { sendPasswordResetEmail } = require('../utils/mailer');
 
 /**
  * Authentication Service
@@ -47,6 +48,7 @@ class AuthService {
         if (user.isActive) {
           user.isActive = false;
           user.refreshToken = null;
+          user.tokenVersion = (user.tokenVersion || 0) + 1;
           await user.save();
         }
         if (!env.isProduction) {
@@ -164,7 +166,7 @@ class AuthService {
     }
 
     const user = await User.findById(decoded.id).select('+refreshToken');
-    if (!user || user.refreshToken !== token) {
+    if (!user || user.refreshToken !== token || (decoded.tv || 0) !== (user.tokenVersion || 0)) {
       throw new AppError('Invalid refresh token or user session expired', 401);
     }
 
@@ -190,9 +192,44 @@ class AuthService {
    */
   async logout(userId) {
     if (userId) {
-      await User.findByIdAndUpdate(userId, { refreshToken: null });
+      // Revoke the refresh token AND every access token issued so far
+      await User.findByIdAndUpdate(userId, { refreshToken: null, $inc: { tokenVersion: 1 } });
     }
     return true;
+  }
+
+  /**
+   * Change password for the signed-in user (requires the current password)
+   */
+  async changePassword(userId, currentPassword, newPassword) {
+    const user = await User.findById(userId).select('+password');
+    if (!user) {
+      throw new AppError('User not found', 404);
+    }
+    const isMatch = await user.comparePassword(currentPassword);
+    if (!isMatch) {
+      throw new AppError('Current password is incorrect', 400);
+    }
+    if (currentPassword === newPassword) {
+      throw new AppError('New password must be different from the current password', 400);
+    }
+
+    user.password = newPassword;
+    user.mustChangePassword = false;
+    user.passwordChangedAt = new Date();
+    user.tokenVersion = (user.tokenVersion || 0) + 1; // sign out other sessions
+
+    const accessToken = generateAccessToken(user);
+    const refreshToken = generateRefreshToken(user);
+    user.refreshToken = refreshToken;
+    await user.save();
+
+    return {
+      message: 'Password changed successfully.',
+      token: accessToken,
+      accessToken,
+      refreshToken
+    };
   }
 
   /**
@@ -211,8 +248,11 @@ class AuthService {
     user.resetPasswordExpires = expires;
     await user.save();
 
+    await sendPasswordResetEmail(user, token);
+
     return {
-      message: 'Password reset token generated successfully.',
+      // Same message whether or not the account exists (prevents email enumeration)
+      message: 'If an account with that email exists, reset instructions have been generated.',
       // Providing resetToken in development mode so client/test can consume it
       resetToken: env.exposeResetToken ? token : undefined
     };
@@ -237,6 +277,9 @@ class AuthService {
     user.resetPasswordToken = null;
     user.resetPasswordExpires = null;
     user.refreshToken = null; // Invalidate current session
+    user.tokenVersion = (user.tokenVersion || 0) + 1; // Revoke all issued access tokens
+    user.mustChangePassword = false;
+    user.passwordChangedAt = new Date();
     await user.save();
 
     return { message: 'Password has been reset successfully. Please login with your new password.' };

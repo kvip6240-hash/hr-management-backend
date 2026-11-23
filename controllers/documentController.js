@@ -1,4 +1,5 @@
 const documentService = require('../services/documentService');
+const { openDownloadStream } = require('../utils/fileStorage');
 const { sendSuccess } = require('../utils/response');
 
 class DocumentController {
@@ -95,7 +96,7 @@ class DocumentController {
     try {
       const { docId } = req.params;
 
-      const { document, absolutePath } = await documentService.getDocumentFile(docId, req.user);
+      const { document, absolutePath, storedFile } = await documentService.getDocumentFile(docId, req.user);
 
       // Determine appropriate MIME Content-Type
       let contentType = document.fileType;
@@ -123,6 +124,16 @@ class DocumentController {
       // Allow cross-origin access for authenticated document fetches from Flutter Web
       res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
       res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition, Content-Type, Content-Length, Cross-Origin-Resource-Policy');
+
+      if (!absolutePath && storedFile) {
+        res.setHeader('Content-Length', storedFile.length);
+        const stream = openDownloadStream(storedFile);
+        stream.on('error', (err) => {
+          if (!res.headersSent) return next(err);
+          res.destroy(err);
+        });
+        return stream.pipe(res);
+      }
 
       return res.sendFile(absolutePath, (err) => {
         if (err && !res.headersSent) {

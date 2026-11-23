@@ -280,6 +280,12 @@ This verifies:
 - **Passwords**: Hashed with bcryptjs (salt rounds: 10). Passwords and reset tokens are excluded (`select: false`) by default and never returned in API responses.
 - **Role Isolation**: Middleware guards routes by validating `req.user.role`.
 - **Database Safety**: MongoDB compound index `{ employee: 1, date: 1 }` prevents duplicate daily check-ins.
+- **Session revocation**: every token carries a `tokenVersion`; logout, password change/reset and deactivation increment it, so previously issued access *and* refresh tokens stop working immediately.
+- **Temporary passwords**: when HR creates an employee without a password, a random 12-character password is generated, returned **once** in the create response as `temporaryPassword` (and emailed when SMTP is configured). The user gets `mustChangePassword: true` until they call `POST /api/auth/change-password`.
+- **Password policy**: new passwords need 8+ characters with at least one letter and one number.
+- **Input hardening**: `$` operator keys are stripped from all input (NoSQL injection), user text in regex filters is escaped, auth endpoints are rate-limited per IP+email, uploads must have an allowed MIME type *and* extension, and document paths can never escape `uploads/documents`.
+- **Durable documents**: uploaded HR/medical documents are stored in MongoDB GridFS (bucket `documents`), so they survive redeploys on hosts with ephemeral disks such as Render. Run `npm run migrate:gridfs` once to copy any files that exist only on local disk.
+- **Production guard**: with `NODE_ENV=production` the server refuses to start without `MONGODB_URI` and strong, distinct `JWT_SECRET` / `JWT_REFRESH_SECRET`.
 
 ---
 
@@ -291,16 +297,17 @@ Base URL: `http://localhost:5000/api`
 
 | Method | Endpoint | Access | Description |
 |---|---|---|---|
-| `GET` | `/api/health` | Public | Verify server is running |
+| `GET` | `/api/health` | Public | Server + database status (`database: "connected"`; 503 when the DB is down) |
 
 ### Auth APIs (`/api/auth`)
 
 | Method | Endpoint | Access | Description |
 |---|---|---|---|
 | `POST` | `/api/auth/login` | Public | Authenticate user & return access/refresh tokens |
-| `POST` | `/api/auth/logout` | Authenticated | Invalidate refresh token |
+| `POST` | `/api/auth/logout` | Authenticated | Revoke refresh token and all issued access tokens |
+| `POST` | `/api/auth/change-password` | Authenticated | `{ currentPassword, newPassword }` → returns fresh tokens |
 | `POST` | `/api/auth/refresh-token` | Public | Obtain new access token using refresh token |
-| `POST` | `/api/auth/forgot-password`| Public | Generate password reset token |
+| `POST` | `/api/auth/forgot-password`| Public | Email a password reset link/code (needs SMTP settings) |
 | `POST` | `/api/auth/reset-password` | Public | Reset password using valid reset token |
 
 ### HR APIs (`/api/hr`) — Requires `HR` Role
@@ -467,3 +474,29 @@ Authorization: Bearer <accessToken>
    Store the `accessToken` in secure storage (e.g. `flutter_secure_storage` in Flutter) and send it as `Authorization: Bearer <accessToken>` with every request.
 4. **Token Refresh**:
    When receiving a `401 Unauthorized` with message `"Authorization token expired"`, send a request to `POST /api/auth/refresh-token` with `{ "refreshToken": "<savedRefreshToken>" }` to renew the access token automatically.
+
+---
+
+## Deploying to Render
+
+`render.yaml` is a Render Blueprint (free web service, Singapore region, health check `/api/health`).
+
+1. **MongoDB Atlas**
+   - Database Access → create a user with read/write on `hr_management`.
+   - Network Access → add `0.0.0.0/0` (Render free instances have no fixed outbound IP).
+   - Copy the `mongodb+srv://...` connection string; URL-encode special characters in the password.
+2. **Render** → New → Blueprint → select this repository and branch → Apply.
+3. Fill the prompted secret values:
+   - `MONGODB_URI` (required), `CLIENT_URL` (your frontend URL(s), comma-separated).
+   - `JWT_SECRET` / `JWT_REFRESH_SECRET` are generated automatically.
+   - Optional: `SMTP_*` and `PASSWORD_RESET_URL` for password-reset emails; `SEED_*` for the seed scripts.
+4. Seed the Super Admin once, from your own computer, against the Atlas database
+   (Render's Shell is not available on the free plan). Create a local `.env` with the same
+   `MONGODB_URI`, plus `NODE_ENV=production`, `SEED_SUPER_ADMIN_EMAIL`, `SEED_SUPER_ADMIN_PASSWORD`,
+   `JWT_SECRET` and `JWT_REFRESH_SECRET` (any two different 32+ character values), then run:
+   ```bash
+   npm ci && npm run seed:superadmin
+   ```
+5. Check `https://<service>.onrender.com/api/health` → `{"success":true,"database":"connected"}`.
+
+Notes: free instances sleep after ~15 minutes idle (first request takes ~30–60 s). Uploaded documents live in MongoDB, so redeploys do not lose them.

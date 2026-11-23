@@ -1,6 +1,6 @@
 const { Server: SocketIOServer } = require('socket.io');
 const jwt = require('jsonwebtoken');
-const { verifyAccessToken } = require('../utils/jwt');
+const { verifyAccessToken, isTokenVersionCurrent } = require('../utils/jwt');
 const env = require('../config/env');
 const User = require('../models/User');
 const Employee = require('../models/Employee');
@@ -35,7 +35,7 @@ class SocketService {
           socket.handshake.headers?.authorization ||
           socket.handshake.query?.token;
 
-        if (!rawToken) {
+        if (!rawToken || typeof rawToken !== 'string') {
           return next(new Error('Authentication error: Missing token'));
         }
 
@@ -43,8 +43,8 @@ class SocketService {
         const decoded = verifyAccessToken(token);
 
         const user = await User.findById(decoded.id).select('+role');
-        if (!user || !user.isActive) {
-          return next(new Error('Authentication error: User inactive or not found'));
+        if (!user || !user.isActive || !isTokenVersionCurrent(decoded, user)) {
+          return next(new Error('Authentication error: User inactive, session ended, or not found'));
         }
 
         socket.user = user;

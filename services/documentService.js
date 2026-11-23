@@ -4,6 +4,7 @@ const fs = require('fs');
 const HRDocument = require('../models/HRDocument');
 const Employee = require('../models/Employee');
 const { AppError } = require('../middleware/errorMiddleware');
+const { findStoredFile, deleteStoredFile } = require('../utils/fileStorage');
 
 class DocumentService {
   /**
@@ -48,6 +49,7 @@ class DocumentService {
       filePath: relativePath,
       fileType: file.mimetype,
       fileSize: file.size,
+      storageId: file.storageId || null,
       issueDate: issueDate || '',
       expiryDate: expiryDate || '',
       uploadedBy: uploaderName,
@@ -98,7 +100,8 @@ class DocumentService {
 
     const uploaderName = user ? `${user.firstName || ''} ${user.lastName || ''}`.trim() || 'HR Admin' : 'HR Admin';
     const oldFileName = document.fileName;
-    const oldFilePath = path.join(__dirname, '..', document.filePath.replace(/^\//, ''));
+    const oldStorageId = document.storageId;
+    const oldFilePath = path.join(__dirname, '..', 'uploads', 'documents', path.basename(String(document.fileName || '')));
 
     // Record history
     document.history.push({
@@ -115,6 +118,7 @@ class DocumentService {
     document.filePath = `/uploads/documents/${file.filename}`;
     document.fileType = file.mimetype;
     document.fileSize = file.size;
+    document.storageId = file.storageId || null;
     if (title) document.title = title.trim();
     if (description !== undefined) document.description = description.trim();
     if (issueDate !== undefined) document.issueDate = issueDate;
@@ -130,6 +134,9 @@ class DocumentService {
         fs.unlinkSync(oldFilePath);
       }
     } catch (_) {}
+    if (oldFileName !== file.filename) {
+      await deleteStoredFile({ storageId: oldStorageId, fileName: oldFileName });
+    }
 
     return document;
   }
@@ -181,34 +188,42 @@ class DocumentService {
     }
     // HR and SUPER_ADMIN bypass ownership check (they can view any employee's documents)
 
+    // Only ever serve files that live inside uploads/documents (blocks path traversal
+    // through crafted filePath/fileName values such as "../../.env").
+    const uploadsRoot = path.resolve(__dirname, '..', 'uploads', 'documents');
+    const insideUploads = (candidate) => candidate === uploadsRoot || candidate.startsWith(uploadsRoot + path.sep);
+
     let absolutePath = null;
     if (document.filePath) {
-      if (path.isAbsolute(document.filePath) && fs.existsSync(document.filePath)) {
-        absolutePath = document.filePath;
-      } else {
-        const cleanRel = document.filePath.replace(/^[/\\]+/, '');
-        const candidate = path.resolve(__dirname, '..', cleanRel);
-        if (fs.existsSync(candidate)) {
-          absolutePath = candidate;
-        }
+      const cleanRel = String(document.filePath).replace(/^[/\\]+/, '');
+      const candidate = path.resolve(__dirname, '..', cleanRel);
+      if (insideUploads(candidate) && fs.existsSync(candidate)) {
+        absolutePath = candidate;
       }
     }
 
     // Fallback: search in uploads/documents by fileName
     if (!absolutePath && document.fileName) {
-      const fallback = path.join(__dirname, '..', 'uploads', 'documents', document.fileName);
-      if (fs.existsSync(fallback)) {
+      const fallback = path.resolve(uploadsRoot, path.basename(String(document.fileName)));
+      if (insideUploads(fallback) && fs.existsSync(fallback)) {
         absolutePath = fallback;
       }
     }
 
-    if (!absolutePath || !fs.existsSync(absolutePath)) {
-      throw new AppError('Document file does not exist on disk', 404);
+    if (absolutePath && fs.existsSync(absolutePath)) {
+      return { document, absolutePath, storedFile: null };
+    }
+
+    // Local disk is not durable on Render: fall back to the GridFS copy in MongoDB
+    const storedFile = await findStoredFile({ storageId: document.storageId, fileName: document.fileName });
+    if (!storedFile) {
+      throw new AppError('Document file does not exist in storage', 404);
     }
 
     return {
       document,
-      absolutePath
+      absolutePath: null,
+      storedFile
     };
   }
 }

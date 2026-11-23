@@ -18,6 +18,36 @@ const {
 const { AppError } = require('../middleware/errorMiddleware');
 const { normalizeLeaveType, enrichLeaveResponse, enrichLeaveResponses } = require('../utils/leaveResponseHelper');
 const { exactMatchRegex, containsRegex } = require('../utils/escapeRegex');
+const crypto = require('crypto');
+const Counter = require('../models/Counter');
+const { sendWelcomeEmail } = require('../utils/mailer');
+
+/** Random 12-character temporary password with letters and digits (always contains both). */
+const generateTemporaryPassword = () => {
+  const letters = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz';
+  const digits = '23456789';
+  const all = letters + digits;
+  const pick = (set) => set[crypto.randomInt(set.length)];
+  const chars = [pick(letters), pick(digits)];
+  while (chars.length < 12) chars.push(pick(all));
+  for (let i = chars.length - 1; i > 0; i -= 1) {
+    const j = crypto.randomInt(i + 1);
+    [chars[i], chars[j]] = [chars[j], chars[i]];
+  }
+  return chars.join('');
+};
+
+/** Next free EMPxxxx id from an atomic counter seeded with the highest existing number. */
+const generateEmployeeId = async () => {
+  const existing = await Employee.find({ employeeId: /^EMP\d+$/ }).select('employeeId').lean();
+  const highest = existing.reduce((max, e) => Math.max(max, parseInt(e.employeeId.slice(3), 10) || 0), 1000);
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const seq = await Counter.next('employeeId', highest);
+    const candidate = `EMP${String(seq).padStart(4, '0')}`;
+    if (!(await Employee.exists({ employeeId: candidate }))) return candidate;
+  }
+  throw new AppError('Could not generate a unique employee ID', 500);
+};
 
 // Stored late flags are authoritative business classifications. A record must
 // have a real check-in; missing check-ins are never counted as late.
@@ -299,11 +329,12 @@ return {
     throw new AppError('An employee with this email address already exists', 409);
   }
 
-  // Auto-generate employeeId if not provided
-  let employeeId = data.employeeId ? data.employeeId.toUpperCase().trim() : null;
+  // Auto-generate employeeId if not provided. Uses an atomic counter seeded from the
+  // highest existing EMPxxxx number, so IDs never repeat after deletions and two
+  // concurrent creates cannot receive the same ID.
+  let employeeId = data.employeeId ? String(data.employeeId).toUpperCase().trim() : null;
   if (!employeeId) {
-    const count = await Employee.countDocuments();
-    employeeId = `EMP${String(count + 1001).padStart(4, '0')}`;
+    employeeId = await generateEmployeeId();
   }
 
   const existingEmpId = await Employee.findOne({ employeeId });
@@ -311,9 +342,11 @@ return {
     throw new AppError(`Employee ID '${employeeId}' is already in use`, 409);
   }
 
-  const finalPassword = (password && String(password).trim().length >= 6)
-    ? String(password).trim()
-    : 'Password@123';
+  // No password supplied by HR → generate a random temporary password (returned once
+  // in the response and emailed when SMTP is configured) instead of a shared default.
+  const providedPassword = password && String(password).trim().length >= 6 ? String(password).trim() : null;
+  const isTemporaryPassword = !providedPassword;
+  const finalPassword = providedPassword || generateTemporaryPassword();
 
   let newUser;
   try {
@@ -340,6 +373,7 @@ return {
         email: normalizedEmail,
         phone: phone || '',
         password: finalPassword,
+        mustChangePassword: isTemporaryPassword,
         role: 'STAFF',
         profileImage: profileImage || null,
         isActive: status === 'ACTIVE'
@@ -385,8 +419,18 @@ return {
 
     await newEmployee.save();
 
-    const populatedEmployee = await Employee.findById(newEmployee._id).populate('user', 'role isActive');
-    return populatedEmployee;
+    const populatedEmployee = await Employee.findById(newEmployee._id).populate('user', 'role isActive mustChangePassword');
+
+    // Only a brand-new account with a generated password needs credentials handed over
+    const issuedTemporaryPassword = isTemporaryPassword && !existingUser;
+    if (!issuedTemporaryPassword) {
+      return populatedEmployee;
+    }
+    const credentialsEmailed = await sendWelcomeEmail(newUser, finalPassword);
+    const result = populatedEmployee.toObject();
+    result.temporaryPassword = finalPassword;
+    result.credentialsEmailed = credentialsEmailed;
+    return result;
   } catch (err) {
     if (newUser && newUser._id) {
       try {
@@ -648,7 +692,7 @@ return {
 
     if (employee.user) {
       const userId = employee.user._id || employee.user;
-      await User.findByIdAndUpdate(userId, { isActive: false, refreshToken: null });
+      await User.findByIdAndUpdate(userId, { isActive: false, refreshToken: null, $inc: { tokenVersion: 1 } });
     }
 
     return {
@@ -695,7 +739,7 @@ return {
 
     if (employee.user) {
       const userId = employee.user._id || employee.user;
-      await User.findByIdAndUpdate(userId, { isActive: false, refreshToken: null });
+      await User.findByIdAndUpdate(userId, { isActive: false, refreshToken: null, $inc: { tokenVersion: 1 } });
     }
 
     return await Employee.findById(employee._id).populate('user', 'role isActive lastLogin');
@@ -793,7 +837,7 @@ return {
 
     if (employee.user) {
       const userId = employee.user._id || employee.user;
-      await User.findByIdAndUpdate(userId, { isActive: false, refreshToken: null });
+      await User.findByIdAndUpdate(userId, { isActive: false, refreshToken: null, $inc: { tokenVersion: 1 } });
     }
 
     return await Employee.findById(employee._id).populate('user', 'role isActive lastLogin');
@@ -1800,7 +1844,7 @@ return {
       if (newStatus === 'ACTIVE' || newStatus === 'ON_LEAVE') {
         await User.findByIdAndUpdate(userId, { isActive: true });
       } else {
-        await User.findByIdAndUpdate(userId, { isActive: false, refreshToken: null });
+        await User.findByIdAndUpdate(userId, { isActive: false, refreshToken: null, $inc: { tokenVersion: 1 } });
       }
     }
 

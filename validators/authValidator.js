@@ -1,5 +1,13 @@
 const { body, validationResult } = require('express-validator');
 const { sendValidationError } = require('../utils/response');
+const env = require('../config/env');
+
+// New passwords: at least 8 characters with at least one letter and one number
+const strongPassword = (field) => body(field)
+  .isString().withMessage('Password must be a string')
+  .isLength({ min: env.minPasswordLength, max: 128 }).withMessage(`Password must be ${env.minPasswordLength}-128 characters long`)
+  .matches(/[A-Za-z]/).withMessage('Password must contain at least one letter')
+  .matches(/[0-9]/).withMessage('Password must contain at least one number');
 
 // Middleware to check validation results
 const validate = (req, res, next) => {
@@ -64,9 +72,15 @@ const resetPasswordValidator = [
   body('token')
     .trim()
     .notEmpty().withMessage('Reset token is required'),
-  body('newPassword')
-    .notEmpty().withMessage('New password is required')
-    .isLength({ min: 6 }).withMessage('Password must be at least 6 characters long'),
+  body('newPassword').notEmpty().withMessage('New password is required'),
+  strongPassword('newPassword'),
+  validate
+];
+
+const changePasswordValidator = [
+  body('currentPassword').isString().notEmpty().withMessage('Current password is required'),
+  body('newPassword').notEmpty().withMessage('New password is required'),
+  strongPassword('newPassword'),
   validate
 ];
 
@@ -75,5 +89,7 @@ module.exports = {
   loginValidator,
   refreshTokenValidator,
   forgotPasswordValidator,
-  resetPasswordValidator
+  resetPasswordValidator,
+  changePasswordValidator,
+  strongPassword
 };

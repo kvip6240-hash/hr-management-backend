@@ -2,6 +2,18 @@ const mongoose = require('mongoose');
 const { body, param, query } = require('express-validator');
 const { validate } = require('./authValidator');
 
+// Optional HR-set password: when given it must be 8+ chars with a letter and a number.
+const checkOptionalPassword = (val) => {
+  if (val === null || val === undefined || val === '') return true;
+  if (typeof val !== 'string' || val.trim().length < 8 || val.length > 128) {
+    throw new Error('Password must be 8-128 characters long');
+  }
+  if (!/[A-Za-z]/.test(val) || !/[0-9]/.test(val)) {
+    throw new Error('Password must contain at least one letter and one number');
+  }
+  return true;
+};
+
 const createEmployeeValidator = [
   body('name')
     .optional()
@@ -29,8 +41,8 @@ const createEmployeeValidator = [
     .isEmail().withMessage('Please provide a valid email')
     .normalizeEmail(),
   body('password')
-    .optional()
-    .isLength({ min: 6 }).withMessage('Password must be at least 6 characters long'),
+    .optional({ nullable: true })
+    .custom(checkOptionalPassword),
   body('employeeId')
     .optional()
     .trim()
@@ -93,13 +105,7 @@ const updateEmployeeValidator = [
     }),
   body('password')
     .optional({ nullable: true })
-    .custom((val) => {
-      if (val === null || val === undefined || val === '') return true;
-      if (typeof val !== 'string' || val.trim().length < 6) {
-        throw new Error('Password must be at least 6 characters long');
-      }
-      return true;
-    }),
+    .custom(checkOptionalPassword),
   body('name')
     .optional()
     .trim(),
@@ -252,7 +258,60 @@ const departmentScheduleValidator = [
   validate
 ];
 
+// Invalid ObjectId route params → 400 (same status the services already returned)
+const objectIdParam = (name) => (req, res, next) => {
+  if (!mongoose.Types.ObjectId.isValid(String(req.params[name] || ''))) {
+    return res.status(400).json({ success: false, message: `Invalid ${name}`, error: null });
+  }
+  return next();
+};
+
+const optionalString = (field, max) => body(field)
+  .optional({ nullable: true })
+  .isString().withMessage(`${field} must be a string`)
+  .bail()
+  .isLength({ max }).withMessage(`${field} must be at most ${max} characters`);
+
+const createTaskValidator = [
+  body().custom((_, { req }) => {
+    if (!req.body || (!req.body.staffId && !req.body.employeeId)) {
+      throw new Error('staffId or employeeId is required');
+    }
+    return true;
+  }),
+  body('staffId').optional({ nullable: true }).isString().withMessage('staffId must be a string'),
+  body('employeeId').optional({ nullable: true }).isString().withMessage('employeeId must be a string'),
+  body('description')
+    .exists({ checkNull: true }).withMessage('Task description is required')
+    .bail()
+    .isString().withMessage('description must be a string')
+    .bail()
+    .trim()
+    .notEmpty().withMessage('Task description is required')
+    .isLength({ max: 5000 }).withMessage('description must be at most 5000 characters'),
+  optionalString('title', 200),
+  optionalString('department', 100),
+  body('dueDate').optional({ nullable: true }).isISO8601().withMessage('dueDate must be a valid date'),
+  validate
+];
+
+const updateTaskValidator = [
+  objectIdParam('id'),
+  optionalString('description', 5000),
+  optionalString('title', 200),
+  optionalString('department', 100),
+  body('staffId').optional({ nullable: true }).isString().withMessage('staffId must be a string'),
+  body('employeeId').optional({ nullable: true }).isString().withMessage('employeeId must be a string'),
+  body('status').optional({ nullable: true }).isString().withMessage('status must be a string'),
+  body('dueDate').optional({ nullable: true }).isISO8601().withMessage('dueDate must be a valid date'),
+  validate
+];
+
+
 module.exports = {
+  createTaskValidator,
+  updateTaskValidator,
+  objectIdParam,
   birthdaysValidator,
   createEmployeeValidator,
   updateEmployeeValidator,

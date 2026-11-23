@@ -829,6 +829,7 @@ class StaffService {
         filePath: `/uploads/documents/${file.filename}`,
         fileType: file.mimetype,
         fileSize: file.size,
+        storageId: file.storageId || null,
         uploadedBy: `${employee.firstName || ''} ${employee.lastName || ''}`.trim() || 'Staff',
         uploadedByUserId: user._id,
         status: 'ACTIVE'
@@ -866,9 +867,16 @@ class StaffService {
     } else if (documentUrl) {
       const fsModule = require('fs');
       const pathModule = require('path');
-      const cleanPath = documentUrl.replace(/^\/?uploads\/documents\//, '');
+      // basename() blocks path traversal such as "../../.env"
+      const cleanPath = pathModule.basename(String(documentUrl).replace(/^\/?uploads\/documents\//, ''));
+      if (!cleanPath || cleanPath.startsWith('.')) {
+        throw new AppError('The specified document URL does not correspond to an uploaded server document', 400);
+      }
       const fullPath = pathModule.join(__dirname, '..', 'uploads', 'documents', cleanPath);
-      if (fsModule.existsSync(fullPath)) {
+      const { findStoredFile } = require('../utils/fileStorage');
+      const storedCopy = fsModule.existsSync(fullPath) ? null : await findStoredFile({ fileName: cleanPath });
+      if (fsModule.existsSync(fullPath) || storedCopy) {
+        const fileSizeOnRecord = storedCopy ? storedCopy.length : fsModule.statSync(fullPath).size;
         finalDocUrl = `/uploads/documents/${cleanPath}`;
         finalDocName = documentName || pathModule.basename(cleanPath);
         const HRDocument = require('../models/HRDocument');
@@ -886,7 +894,8 @@ class StaffService {
             originalName: finalDocName,
             filePath: finalDocUrl,
             fileType: mimeType,
-            fileSize: fsModule.statSync(fullPath).size,
+            fileSize: fileSizeOnRecord,
+            storageId: storedCopy ? storedCopy._id : null,
             uploadedBy: `${employee.firstName || ''} ${employee.lastName || ''}`.trim() || 'Staff',
             uploadedByUserId: user._id,
             status: 'ACTIVE'
@@ -899,7 +908,7 @@ class StaffService {
           originalName: finalDocName,
           filePath: finalDocUrl,
           fileType: hrDoc.fileType || 'application/pdf',
-          fileSize: hrDoc.fileSize || fsModule.statSync(fullPath).size,
+          fileSize: hrDoc.fileSize || fileSizeOnRecord,
           fileUrl: finalDocUrl
         };
       } else {

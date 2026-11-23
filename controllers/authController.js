@@ -35,6 +35,19 @@ class AuthController {
   }
 
   /**
+   * POST /api/auth/change-password
+   */
+  async changePassword(req, res, next) {
+    try {
+      const { currentPassword, newPassword } = req.body;
+      const result = await authService.changePassword(req.user._id, currentPassword, newPassword);
+      return sendSuccess(res, result.message, result);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
    * POST /api/auth/refresh-token
    */
   async refreshToken(req, res, next) {
