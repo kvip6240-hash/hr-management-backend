@@ -1,0 +1,418 @@
+const mongoose = require('mongoose');
+const { body, param } = require('express-validator');
+const { validate } = require('./authValidator');
+const { normalizeLeaveType } = require('../utils/leaveResponseHelper');
+
+const updateProfileValidator = [
+  body('phone')
+    .optional()
+    .trim(),
+  body('address')
+    .optional()
+    .trim(),
+  body('city')
+    .optional()
+    .trim(),
+  body('state')
+    .optional()
+    .trim(),
+  body('country')
+    .optional()
+    .trim(),
+  body('profileImage')
+    .optional()
+    .trim(),
+  body('dateOfBirth')
+    .optional({ nullable: true })
+    .custom((value) => {
+      if (value === null || value === '' || value === undefined) return true;
+      if (typeof value === 'boolean') throw new Error('Date of birth must be a valid date');
+      const d = new Date(value);
+      if (isNaN(d.getTime())) {
+        throw new Error('Date of birth must be a valid date');
+      }
+      if (d > new Date()) {
+        throw new Error('Date of birth cannot be in the future');
+      }
+      return true;
+    }),
+  body('emergencyContact')
+    .optional()
+    .isObject().withMessage('Emergency contact must be an object'),
+  body('emergencyContact.name')
+    .optional()
+    .trim(),
+  body('emergencyContact.relationship')
+    .optional()
+    .trim(),
+  body('emergencyContact.phone')
+    .optional()
+    .trim(),
+  validate
+];
+
+const checkInValidator = [
+  body('remarks')
+    .optional()
+    .trim()
+    .isLength({ max: 255 }).withMessage('Remarks must be under 255 characters'),
+  validate
+];
+
+const checkOutValidator = [
+  body('remarks')
+    .optional()
+    .trim()
+    .isLength({ max: 255 }).withMessage('Remarks must be under 255 characters'),
+  validate
+];
+
+/**
+ * Normalizes frontend break types ('Tea Break 1', 'Lunch Break', 'Tea Break 2', 'Morning Break', 'Afternoon Break', etc.)
+ */
+const getBreakCategory = (type) => {
+  if (!type || typeof type !== 'string') return null;
+  const t = type.trim().toLowerCase().replace(/[\-_]/g, ' ');
+  if (
+    t === 'tea break 1' ||
+    t === 'tea 1' ||
+    t === 'teabreak1' ||
+    t === 'teabreak 1' ||
+    t === 'tea break one' ||
+    t === 'morning' ||
+    t === 'morning break' ||
+    t === 'morningbreak'
+  ) {
+    return 'TEA_BREAK_1';
+  }
+  if (t === 'lunch' || t === 'lunch break' || t === 'lunchbreak') {
+    return 'LUNCH_BREAK';
+  }
+  if (
+    t === 'tea break 2' ||
+    t === 'tea 2' ||
+    t === 'teabreak2' ||
+    t === 'teabreak 2' ||
+    t === 'tea break two' ||
+    t === 'afternoon' ||
+    t === 'afternoon break' ||
+    t === 'afternoonbreak'
+  ) {
+    return 'TEA_BREAK_2';
+  }
+  return null;
+};
+
+const areBreaksEquivalent = (typeA, typeB) => {
+  const catA = getBreakCategory(typeA);
+  const catB = getBreakCategory(typeB);
+  return Boolean(catA && catB && catA === catB);
+};
+
+const normalizeBreakType = (type) => {
+  if (!type || typeof type !== 'string') return null;
+  const raw = type.trim();
+  const lower = raw.toLowerCase();
+
+  if (lower === 'tea_break_1') return 'tea_break_1';
+  if (lower === 'tea_break_2') return 'tea_break_2';
+  if (lower === 'lunch') return 'lunch';
+
+  const t = lower.replace(/[\-_]/g, ' ');
+  if (
+    t === 'tea break 1' ||
+    t === 'tea 1' ||
+    t === 'teabreak1' ||
+    t === 'tea break one'
+  ) {
+    return raw === 'tea_break_1' ? 'tea_break_1' : 'Tea Break 1';
+  }
+  if (t === 'lunch break' || t === 'lunchbreak') {
+    return 'Lunch Break';
+  }
+  if (
+    t === 'tea break 2' ||
+    t === 'tea 2' ||
+    t === 'teabreak2' ||
+    t === 'tea break two'
+  ) {
+    return raw === 'tea_break_2' ? 'tea_break_2' : 'Tea Break 2';
+  }
+  if (t === 'morning' || t === 'morning break' || t === 'morningbreak') {
+    return 'Morning Break';
+  }
+  if (t === 'afternoon' || t === 'afternoon break' || t === 'afternoonbreak') {
+    return 'Afternoon Break';
+  }
+  return null;
+};
+
+const breakStartValidator = [
+  body('breakType').optional().trim(),
+  body('type').optional().trim(),
+  body('breakName').optional().trim(),
+  body('name').optional().trim(),
+  body('remarks')
+    .optional()
+    .trim()
+    .isLength({ max: 255 }).withMessage('Remarks must be under 255 characters'),
+  (req, res, next) => {
+    if (req.params.attendanceId && !mongoose.Types.ObjectId.isValid(req.params.attendanceId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid attendance ID format'
+      });
+    }
+
+    const rawType = req.body.breakType || req.body.type || req.body.breakName || req.body.name;
+    if (!rawType || !String(rawType).trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'breakType is required. Supported types: tea_break_1, lunch, tea_break_2.'
+      });
+    }
+    const normalized = normalizeBreakType(rawType);
+    if (!normalized) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid break type. Supported types: tea_break_1, lunch, tea_break_2 (or Tea Break 1, Lunch Break, Tea Break 2).'
+      });
+    }
+    req.body.canonicalBreakType = normalized;
+    req.body.breakType = normalized;
+    next();
+  },
+  validate
+];
+
+const breakEndValidator = [
+  body('breakType').optional().trim(),
+  body('type').optional().trim(),
+  body('breakName').optional().trim(),
+  body('name').optional().trim(),
+  body('remarks')
+    .optional()
+    .trim()
+    .isLength({ max: 255 }).withMessage('Remarks must be under 255 characters'),
+  (req, res, next) => {
+    if (req.params.attendanceId && !mongoose.Types.ObjectId.isValid(req.params.attendanceId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid attendance ID format'
+      });
+    }
+
+    const rawType = req.body.breakType || req.body.type || req.body.breakName || req.body.name;
+    if (rawType && String(rawType).trim()) {
+      const normalized = normalizeBreakType(rawType);
+      if (!normalized) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid break type. Supported types: tea_break_1, lunch, tea_break_2 (or Tea Break 1, Lunch Break, Tea Break 2).'
+        });
+      }
+      req.body.canonicalBreakType = normalized;
+      req.body.breakType = normalized;
+    }
+    next();
+  },
+  validate
+];
+
+const applyLeaveValidator = [
+  (req, res, next) => {
+    if (req.body) {
+      if (!req.body.startDate && req.body.fromDate) {
+        req.body.startDate = req.body.fromDate;
+      }
+      if (!req.body.endDate && req.body.toDate) {
+        req.body.endDate = req.body.toDate;
+      }
+      if (req.body.leaveType) {
+        req.body.leaveType = normalizeLeaveType(req.body.leaveType);
+      }
+      if (req.body.durationType) {
+        req.body.durationType = String(req.body.durationType).trim().toUpperCase();
+      } else {
+        req.body.durationType = 'FULL_DAY';
+      }
+      if (req.body.halfDaySession !== undefined && req.body.halfDaySession !== null) {
+        const trimmed = String(req.body.halfDaySession).trim();
+        req.body.halfDaySession = trimmed ? trimmed.toUpperCase() : null;
+      }
+    }
+    next();
+  },
+  body('leaveType')
+    .trim()
+    .notEmpty().withMessage('Leave type is required')
+    .isIn(['CASUAL', 'SICK', 'ANNUAL', 'MEDICAL', 'EARNED', 'UNPAID', 'OTHER'])
+    .withMessage('Leave type must be CASUAL, SICK, ANNUAL, MEDICAL, UNPAID, or OTHER'),
+  body('durationType')
+    .optional()
+    .trim()
+    .toUpperCase()
+    .isIn(['FULL_DAY', 'HALF_DAY'])
+    .withMessage('Duration type must be FULL_DAY or HALF_DAY'),
+  body('halfDaySession')
+    .custom((val, { req }) => {
+      const durationType = (req.body?.durationType || 'FULL_DAY').toUpperCase();
+      if (durationType === 'HALF_DAY') {
+        if (!val || !['FORENOON', 'AFTERNOON'].includes(String(val).trim().toUpperCase())) {
+          throw new Error('Half-day session is required and must be FORENOON or AFTERNOON');
+        }
+      } else if (durationType === 'FULL_DAY') {
+        if (val !== undefined && val !== null && String(val).trim() !== '') {
+          throw new Error('Full-day leave must not have a half-day session');
+        }
+      }
+      return true;
+    }),
+  body('startDate')
+    .notEmpty().withMessage('Start date is required')
+    .isISO8601().withMessage('Start date must be a valid date (YYYY-MM-DD)')
+    .custom((val) => {
+      const d = new Date(val);
+      if (isNaN(d.getTime())) {
+        throw new Error('Start date must be a valid date (YYYY-MM-DD)');
+      }
+      return true;
+    }),
+  body('endDate')
+    .notEmpty().withMessage('End date is required')
+    .isISO8601().withMessage('End date must be a valid date (YYYY-MM-DD)')
+    .custom((endDate, { req }) => {
+      const start = new Date(req.body.startDate);
+      const end = new Date(endDate);
+      if (isNaN(end.getTime())) {
+        throw new Error('End date must be a valid date (YYYY-MM-DD)');
+      }
+      if (end < start) {
+        throw new Error('End date cannot be earlier than start date');
+      }
+
+      const durationType = (req.body?.durationType || 'FULL_DAY').toUpperCase();
+      if (durationType === 'HALF_DAY') {
+        const startStr = req.body.startDate ? String(req.body.startDate).slice(0, 10) : '';
+        const endStr = String(endDate).slice(0, 10);
+        if (startStr !== endStr) {
+          throw new Error('Half-day leave must have the same start and end date');
+        }
+      }
+      return true;
+    }),
+  body('reason')
+    .trim()
+    .notEmpty().withMessage('Reason for leave is required')
+    .isLength({ min: 2, max: 500 }).withMessage('Reason must be between 2 and 500 characters'),
+  body('documentId')
+    .optional({ nullable: true })
+    .isMongoId().withMessage('Invalid document ID format'),
+  body('documentUrl')
+    .optional({ nullable: true })
+    .custom((val) => {
+      if (!val) return true;
+      if (typeof val !== 'string') throw new Error('Document URL must be a string');
+      if (/^[a-zA-Z]:[\\\/]/.test(val) || /^file:\/\//i.test(val) || /^content:\/\//i.test(val)) {
+        throw new Error('Local client paths are not valid server document URLs');
+      }
+      return true;
+    }),
+  body('documentName')
+    .optional({ nullable: true })
+    .trim()
+    .isLength({ max: 255 }).withMessage('Document name must be under 255 characters'),
+  body('leaveType').custom((val, { req }) => {
+    const norm = normalizeLeaveType(val);
+    if (norm === 'MEDICAL') {
+      const hasProof = Boolean(req.file || req.body?.documentId || req.body?.documentUrl);
+      if (!hasProof) {
+        throw new Error('Medical proof document is required for Medical Leave');
+      }
+    }
+    return true;
+  }),
+  validate
+];
+
+const leaveIdParamValidator = [
+  param('id')
+    .isMongoId().withMessage('Invalid leave ID format'),
+  validate
+];
+
+const dailyUpdateValidator = [
+  (req, res, next) => {
+    if (req.body) {
+      if (!req.body.updateText) {
+        if (req.body.workUpdate) req.body.updateText = req.body.workUpdate;
+        else if (req.body.text) req.body.updateText = req.body.text;
+        else if (req.body.description) req.body.updateText = req.body.description;
+      }
+    }
+    next();
+  },
+  body('title')
+    .optional({ nullable: true })
+    .trim()
+    .isLength({ max: 200 }).withMessage('Title cannot exceed 200 characters'),
+  body('updateText')
+    .trim()
+    .notEmpty().withMessage('Update text is required')
+    .isLength({ min: 2, max: 2000 }).withMessage('Update text must be between 2 and 2000 characters'),
+  body('date')
+    .optional({ nullable: true })
+    .trim()
+    .custom((val) => {
+      if (!val) return true;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(val) && isNaN(new Date(val).getTime())) {
+        throw new Error('Date must be a valid date (YYYY-MM-DD)');
+      }
+      return true;
+    }),
+  body('tasksCompleted')
+    .optional()
+    .isArray().withMessage('Tasks completed must be an array of strings'),
+  body('tasksCompleted.*')
+    .optional()
+    .trim()
+    .isString().withMessage('Each completed task item must be a string'),
+  body('blockers')
+    .optional()
+    .trim()
+    .isLength({ max: 1000 }).withMessage('Blockers text must be under 1000 characters'),
+  body('hoursWorked')
+    .optional({ nullable: true })
+    .isFloat({ min: 0, max: 24 }).withMessage('Hours worked must be a number between 0 and 24'),
+  validate
+];
+
+const dailyUpdateIdParamValidator = [
+  param('id')
+    .isMongoId().withMessage('Invalid daily update ID format'),
+  validate
+];
+
+const attendanceIdParamValidator = [
+  param('attendanceId')
+    .isMongoId().withMessage('Invalid attendance ID format'),
+  validate
+];
+
+module.exports = {
+  normalizeBreakType,
+  getBreakCategory,
+  areBreaksEquivalent,
+  breakStartValidator,
+  breakEndValidator,
+  normalizeLeaveType,
+  updateProfileValidator,
+  checkInValidator,
+  checkOutValidator,
+  applyLeaveValidator,
+  leaveIdParamValidator,
+  dailyUpdateValidator,
+  dailyUpdateIdParamValidator,
+  attendanceIdParamValidator
+};
+
